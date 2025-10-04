@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { prisma } from "../lib/db";
 import { AppError, asyncHandler } from "../middleware/errorHandler";
+import { convertCurrency } from "../services/currencyService";
 
 /**
  * Get expenses pending approval for current user
@@ -64,26 +65,55 @@ export const getPendingApprovals = asyncHandler(async (req: Request, res: Respon
     return step.sequence === expense.currentApprovalStep;
   });
 
+  // Convert amounts to company currency if different
+  const approvalsWithConversion = await Promise.all(
+    currentPendingApprovals.map(async (step: any) => {
+      let convertedAmount = step.expense.amount;
+      let conversionRate = 1;
+
+      if (step.expense.currency !== step.expense.company.baseCurrency) {
+        try {
+          const conversion = await convertCurrency(
+            step.expense.amount,
+            step.expense.currency,
+            step.expense.company.baseCurrency
+          );
+          convertedAmount = conversion.converted;
+          conversionRate = conversion.rate;
+        } catch (error) {
+          console.error(`Failed to convert currency for expense ${step.expense.id}:`, error);
+          // Keep original amount if conversion fails
+        }
+      }
+
+      return {
+        approvalStepId: step.id,
+        expense: {
+          id: step.expense.id,
+          amount: step.expense.amount,
+          currency: step.expense.currency,
+          convertedAmount,
+          conversionRate,
+          category: step.expense.category,
+          description: step.expense.description,
+          date: step.expense.date,
+          status: step.expense.status,
+          employee: step.expense.employee,
+          company: step.expense.company,
+          createdAt: step.expense.createdAt,
+          currentApprovalStep: step.expense.currentApprovalStep,
+          approvalSteps: step.expense.approvalSteps,
+        },
+        currentStep: step.sequence,
+        totalSteps: step.expense.approvalSteps.length,
+        allApprovalSteps: step.expense.approvalSteps,
+      };
+    })
+  );
+
   res.json({
-    count: currentPendingApprovals.length,
-    approvals: currentPendingApprovals.map((step: any) => ({
-      approvalStepId: step.id,
-      expense: {
-        id: step.expense.id,
-        amount: step.expense.amount,
-        currency: step.expense.currency,
-        category: step.expense.category,
-        description: step.expense.description,
-        date: step.expense.date,
-        status: step.expense.status,
-        employee: step.expense.employee,
-        company: step.expense.company,
-        createdAt: step.expense.createdAt,
-      },
-      currentStep: step.sequence,
-      totalSteps: step.expense.approvalSteps.length,
-      allApprovalSteps: step.expense.approvalSteps,
-    })),
+    count: approvalsWithConversion.length,
+    approvals: approvalsWithConversion,
   });
 });
 
