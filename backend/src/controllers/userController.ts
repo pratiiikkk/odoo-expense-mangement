@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { prisma } from "../lib/db";
 import { AppError, asyncHandler } from "../middleware/errorHandler";
+import { auth } from "../lib/auth";
 import crypto from "crypto";
 
 export const getMe = asyncHandler(async (req: Request, res: Response) => {
@@ -112,11 +113,23 @@ export const createUser = asyncHandler(async (req: Request, res: Response) => {
   // Generate random password
   const randomPassword = crypto.randomBytes(8).toString("hex");
 
-  // Create user with Better Auth account
-  const user = await prisma.user.create({
-    data: {
+  // Use Better Auth to create the user with proper password hashing
+  const signupResult = await auth.api.signUpEmail({
+    body: {
       name,
       email,
+      password: randomPassword,
+    },
+  });
+
+  if (!signupResult || !signupResult.user) {
+    throw new AppError("Failed to create user account", 500);
+  }
+
+  // Update the user with role, company, and manager
+  const user = await prisma.user.update({
+    where: { id: signupResult.user.id },
+    data: {
       role,
       companyId: req.user.companyId,
       managerId,
@@ -129,17 +142,6 @@ export const createUser = asyncHandler(async (req: Request, res: Response) => {
           email: true,
         },
       },
-    },
-  });
-
-  // Create account with hashed password
-  // Note: In a real implementation, you should send this password via email
-  await prisma.account.create({
-    data: {
-      userId: user.id,
-      accountId: email,
-      providerId: "credential",
-      password: randomPassword, // This should be hashed by Better Auth
     },
   });
 
