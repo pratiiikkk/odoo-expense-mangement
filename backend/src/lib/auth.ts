@@ -28,14 +28,18 @@ export const auth = betterAuth({
     user: {
       create: {
         after: async (user) => {
-          // Auto-create company for new users (first user becomes ADMIN)
+          // Auto-create company ONLY for the first signup (not for admin-created users)
           try {
-            // Check if user already has a company
+            // Wait a bit to allow admin's user creation to set companyId first
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Check if user already has a company (set by admin during creation)
             const existingUser = await prisma.user.findUnique({
               where: { id: user.id },
               include: { company: true },
             });
 
+            // Only create company if user doesn't have one (initial signup scenario)
             if (!existingUser?.companyId) {
               const defaultCountry = "United States";
               const baseCurrency = await getCurrencyForCountry(defaultCountry);
@@ -60,6 +64,8 @@ export const auth = betterAuth({
               });
 
               console.log(`✅ Company created for user ${user.email}: ${company.id}`);
+            } else {
+              console.log(`ℹ️ User ${user.email} already has company, skipping company creation`);
             }
           } catch (error) {
             console.error("Failed to create company for user:", error);
