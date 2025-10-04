@@ -141,6 +141,7 @@ model ApprovalRule {
   specificApprover    User?               @relation(fields: [specificApproverId], references: [id])
   isManagerApprover   Boolean             @default(true)
   sequence            Int
+  isActive            Boolean             @default(true)
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 

@@ -5,6 +5,7 @@ import {
   updateApprovalRule,
   deleteApprovalRule,
   getEligibleApprovers,
+  toggleRuleStatus,
 } from "../controllers/approvalRuleController";
 import { requireAuth, requireRole } from "../middleware/authMiddleware";
 
@@ -25,6 +26,9 @@ router.post("/", createApprovalRule);
 
 // Update approval rule
 router.put("/:ruleId", updateApprovalRule);
+
+// Toggle rule status
+router.patch("/:ruleId/toggle", toggleRuleStatus);
 
 // Delete approval rule
 router.delete("/:ruleId", deleteApprovalRule);
