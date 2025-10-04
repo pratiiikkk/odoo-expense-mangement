@@ -53,28 +53,34 @@ async function generateApprovalSteps(
 
   // Step 1: Manager approval if required
   if (rule.isManagerApprover && employee?.managerId) {
-    await prisma.approvalStep.create({
-      data: {
-        expenseId,
-        approverId: employee.managerId,
-        sequence: currentSequence,
-        status: "PENDING",
-      },
-    });
-    currentSequence++;
+    // Don't create approval step if manager is the same as employee (self-approval)
+    if (employee.managerId !== employeeId) {
+      await prisma.approvalStep.create({
+        data: {
+          expenseId,
+          approverId: employee.managerId,
+          sequence: currentSequence,
+          status: "PENDING",
+        },
+      });
+      currentSequence++;
+    }
   }
 
   // Step 2: Handle SPECIFIC approver
   if (rule.ruleType === "SPECIFIC" && rule.specificApproverId) {
-    await prisma.approvalStep.create({
-      data: {
-        expenseId,
-        approverId: rule.specificApproverId,
-        sequence: currentSequence,
-        status: "PENDING",
-      },
-    });
-    currentSequence++;
+    // Don't create approval step if specific approver is the same as employee (self-approval)
+    if (rule.specificApproverId !== employeeId) {
+      await prisma.approvalStep.create({
+        data: {
+          expenseId,
+          approverId: rule.specificApproverId,
+          sequence: currentSequence,
+          status: "PENDING",
+        },
+      });
+      currentSequence++;
+    }
   }
 
   // Step 3: Additional approvers based on rule type
@@ -163,11 +169,21 @@ export const submitExpense = asyncHandler(async (req: Request, res: Response) =>
     user.companyId
   );
 
-  // Update expense current approval step
+  // Update expense based on approval steps
   if (currentStep > 0) {
+    // Has approval steps - set to first step
     await prisma.expense.update({
       where: { id: expense.id },
       data: { currentApprovalStep: currentStep },
+    });
+  } else {
+    // No approval steps needed - auto-approve
+    await prisma.expense.update({
+      where: { id: expense.id },
+      data: { 
+        currentApprovalStep: 0,
+        status: "APPROVED"
+      },
     });
   }
 
