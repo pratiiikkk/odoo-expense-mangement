@@ -1,0 +1,292 @@
+import { Request, Response } from "express";
+import { prisma } from "../lib/db";
+import { AppError, asyncHandler } from "../middleware/errorHandler";
+import crypto from "crypto";
+
+export const getMe = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user) {
+    throw new AppError("User not authenticated", 401);
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    include: {
+      company: true,
+      manager: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
+    },
+  });
+
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  res.json({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    company: user.company,
+    manager: user.manager,
+    createdAt: user.createdAt,
+  });
+});
+
+export const getUsers = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user?.companyId) {
+    throw new AppError("User not associated with a company", 400);
+  }
+
+  const users = await prisma.user.findMany({
+    where: { companyId: req.user.companyId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      createdAt: true,
+      manager: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  res.json(users);
+});
+
+export const createUser = asyncHandler(async (req: Request, res: Response) => {
+  const { name, email, role, managerId } = req.body;
+
+  if (!req.user?.companyId) {
+    throw new AppError("User not associated with a company", 400);
+  }
+
+  // Validate required fields
+  if (!name || !email || !role) {
+    throw new AppError("Name, email, and role are required", 400);
+  }
+
+  // Validate role
+  if (!["EMPLOYEE", "MANAGER", "ADMIN"].includes(role)) {
+    throw new AppError("Invalid role. Must be EMPLOYEE, MANAGER, or ADMIN", 400);
+  }
+
+  // Check if user already exists
+  const existingUser = await prisma.user.findUnique({
+    where: { email },
+  });
+
+  if (existingUser) {
+    throw new AppError("User with this email already exists", 400);
+  }
+
+  // Validate manager if provided
+  if (managerId) {
+    const manager = await prisma.user.findFirst({
+      where: {
+        id: managerId,
+        companyId: req.user.companyId,
+      },
+    });
+
+    if (!manager) {
+      throw new AppError("Manager not found or not in the same company", 404);
+    }
+
+    // Manager should have MANAGER or ADMIN role
+    if (manager.role !== "MANAGER" && manager.role !== "ADMIN") {
+      throw new AppError("Selected manager must have MANAGER or ADMIN role", 400);
+    }
+  }
+
+  // Generate random password
+  const randomPassword = crypto.randomBytes(8).toString("hex");
+
+  // Create user with Better Auth account
+  const user = await prisma.user.create({
+    data: {
+      name,
+      email,
+      role,
+      companyId: req.user.companyId,
+      managerId,
+    },
+    include: {
+      manager: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
+    },
+  });
+
+  // Create account with hashed password
+  // Note: In a real implementation, you should send this password via email
+  await prisma.account.create({
+    data: {
+      userId: user.id,
+      accountId: email,
+      providerId: "credential",
+      password: randomPassword, // This should be hashed by Better Auth
+    },
+  });
+
+  res.status(201).json({
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      manager: user.manager,
+      createdAt: user.createdAt,
+    },
+    temporaryPassword: randomPassword,
+    message: "User created successfully. Send this password to the user securely.",
+  });
+});
+
+export const updateUser = asyncHandler(async (req: Request, res: Response) => {
+  const { userId } = req.params;
+  const { name, role, managerId } = req.body;
+
+  if (!req.user?.companyId) {
+    throw new AppError("User not associated with a company", 400);
+  }
+
+  // Ensure user belongs to same company
+  const existingUser = await prisma.user.findFirst({
+    where: {
+      id: userId,
+      companyId: req.user.companyId,
+    },
+  });
+
+  if (!existingUser) {
+    throw new AppError("User not found", 404);
+  }
+
+  // Validate role if provided
+  if (role && !["EMPLOYEE", "MANAGER", "ADMIN"].includes(role)) {
+    throw new AppError("Invalid role. Must be EMPLOYEE, MANAGER, or ADMIN", 400);
+  }
+
+  // Validate manager if provided
+  if (managerId) {
+    // Check if trying to set themselves as their own manager
+    if (managerId === userId) {
+      throw new AppError("User cannot be their own manager", 400);
+    }
+
+    const manager = await prisma.user.findFirst({
+      where: {
+        id: managerId,
+        companyId: req.user.companyId,
+      },
+    });
+
+    if (!manager) {
+      throw new AppError("Manager not found or not in the same company", 404);
+    }
+
+    // Manager should have MANAGER or ADMIN role
+    if (manager.role !== "MANAGER" && manager.role !== "ADMIN") {
+      throw new AppError("Selected manager must have MANAGER or ADMIN role", 400);
+    }
+
+    // Check for circular manager relationships
+    await checkCircularManagerRelationship(managerId, userId);
+  }
+
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      name,
+      role,
+      managerId,
+    },
+    include: {
+      manager: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
+    },
+  });
+
+  res.json({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    manager: user.manager,
+    updatedAt: user.updatedAt,
+  });
+});
+
+/**
+ * Helper function to check for circular manager relationships
+ * Prevents A -> B -> A or A -> B -> C -> A scenarios
+ */
+async function checkCircularManagerRelationship(
+  managerId: string,
+  employeeId: string,
+  visited: Set<string> = new Set()
+): Promise<void> {
+  if (visited.has(managerId)) {
+    throw new AppError("Circular manager relationship detected", 400);
+  }
+
+  visited.add(managerId);
+
+  const manager = await prisma.user.findUnique({
+    where: { id: managerId },
+    select: { managerId: true },
+  });
+
+  if (manager?.managerId) {
+    if (manager.managerId === employeeId) {
+      throw new AppError("Circular manager relationship detected", 400);
+    }
+    await checkCircularManagerRelationship(manager.managerId, employeeId, visited);
+  }
+}
+
+export const deleteUser = asyncHandler(async (req: Request, res: Response) => {
+  const { userId } = req.params;
+
+  if (!req.user?.companyId) {
+    throw new AppError("User not associated with a company", 400);
+  }
+
+  // Ensure user belongs to same company
+  const existingUser = await prisma.user.findFirst({
+    where: {
+      id: userId,
+      companyId: req.user.companyId,
+    },
+  });
+
+  if (!existingUser) {
+    throw new AppError("User not found", 404);
+  }
+
+  await prisma.user.delete({
+    where: { id: userId },
+  });
+
+  res.json({ message: "User deleted successfully" });
+});

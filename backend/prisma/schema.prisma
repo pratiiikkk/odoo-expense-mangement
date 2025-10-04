@@ -1,0 +1,193 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Better Auth Tables
+model User {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Custom fields for expense management
+  role          UserRole  @default(EMPLOYEE)
+  companyId     String?
+  company       Company?  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  managerId     String?
+  manager       User?     @relation("ManagerEmployees", fields: [managerId], references: [id])
+  employees     User[]    @relation("ManagerEmployees")
+
+  // Better Auth relations
+  sessions      Session[]
+  accounts      Account[]
+
+  // Expense management relations
+  expenses              Expense[]
+  approvalSteps         ApprovalStep[]
+  managedApprovalRules  ApprovalRule[]
+  createdCompanies      Company[]       @relation("CompanyAdmin")
+
+  @@index([email])
+  @@index([companyId])
+  @@index([managerId])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Account {
+  id           String   @id @default(uuid())
+  accountId    String
+  providerId   String
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken  String?
+  refreshToken String?
+  idToken      String?
+  accessTokenExpiresAt DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope        String?
+  password     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id @default(uuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([identifier, value])
+}
+
+// Expense Management Models
+model Company {
+  id           String   @id @default(uuid())
+  name         String
+  baseCurrency String   @default("USD")
+  country      String
+  adminUserId  String
+  admin        User     @relation("CompanyAdmin", fields: [adminUserId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  users         User[]
+  expenses      Expense[]
+  approvalRules ApprovalRule[]
+
+  @@index([adminUserId])
+}
+
+model Expense {
+  id          String        @id @default(uuid())
+  employeeId  String
+  employee    User          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  companyId   String
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  amount      Float
+  currency    String
+  category    String
+  description String
+  date        DateTime
+  status      ExpenseStatus @default(PENDING)
+  currentApprovalStep Int   @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  approvalSteps ApprovalStep[]
+
+  @@index([employeeId])
+  @@index([companyId])
+  @@index([status])
+}
+
+model ApprovalRule {
+  id                  String              @id @default(uuid())
+  companyId           String
+  company             Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name                String
+  ruleType            ApprovalRuleType
+  thresholdAmount     Float?
+  approvalPercentage  Int?
+  specificApproverId  String?
+  specificApprover    User?               @relation(fields: [specificApproverId], references: [id])
+  isManagerApprover   Boolean             @default(true)
+  sequence            Int
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@index([companyId])
+  @@index([specificApproverId])
+}
+
+model ApprovalStep {
+  id         String              @id @default(uuid())
+  expenseId  String
+  expense    Expense             @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  approverId String
+  approver   User                @relation(fields: [approverId], references: [id])
+  sequence   Int
+  status     ApprovalStepStatus  @default(PENDING)
+  comments   String?
+  actionDate DateTime?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@index([expenseId])
+  @@index([approverId])
+  @@index([status])
+}
+
+// Enums
+enum UserRole {
+  ADMIN
+  MANAGER
+  EMPLOYEE
+}
+
+enum ExpenseStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ApprovalRuleType {
+  SEQUENTIAL
+  PERCENTAGE
+  SPECIFIC
+  HYBRID
+}
+
+enum ApprovalStepStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
