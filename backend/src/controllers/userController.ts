@@ -28,13 +28,15 @@ export const getMe = asyncHandler(async (req: Request, res: Response) => {
   }
 
   res.json({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    company: user.company,
-    manager: user.manager,
-    createdAt: user.createdAt,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      company: user.company,
+      manager: user.manager,
+      createdAt: user.createdAt,
+    },
   });
 });
 
@@ -126,7 +128,8 @@ export const createUser = asyncHandler(async (req: Request, res: Response) => {
     throw new AppError("Failed to create user account", 500);
   }
 
-  // Update the user with role, company, and manager
+  // IMPORTANT: Update user immediately to prevent the Better Auth hook from creating a company
+  // The hook checks if companyId exists, so we set it here first
   const user = await prisma.user.update({
     where: { id: signupResult.user.id },
     data: {
@@ -144,6 +147,16 @@ export const createUser = asyncHandler(async (req: Request, res: Response) => {
       },
     },
   });
+
+  // Delete any auto-created company (if the hook ran before our update)
+  const autoCreatedCompany = await prisma.company.findFirst({
+    where: { adminUserId: signupResult.user.id },
+  });
+  
+  if (autoCreatedCompany && autoCreatedCompany.id !== req.user.companyId) {
+    console.log(`Cleaning up auto-created company for ${email}`);
+    await prisma.company.delete({ where: { id: autoCreatedCompany.id } });
+  }
 
   res.status(201).json({
     user: {
@@ -270,6 +283,10 @@ async function checkCircularManagerRelationship(
 export const deleteUser = asyncHandler(async (req: Request, res: Response) => {
   const { userId } = req.params;
 
+  console.log('=== DELETE USER REQUEST ===');
+  console.log('UserId to delete:', userId);
+  console.log('Requester:', req.user?.id, req.user?.role);
+
   if (!req.user?.companyId) {
     throw new AppError("User not associated with a company", 400);
   }
@@ -280,15 +297,72 @@ export const deleteUser = asyncHandler(async (req: Request, res: Response) => {
       id: userId,
       companyId: req.user.companyId,
     },
+    include: {
+      expenses: true,
+      approvalSteps: true,
+      employees: true,
+      managedApprovalRules: true,
+    },
   });
 
   if (!existingUser) {
+    console.log('User not found');
     throw new AppError("User not found", 404);
   }
 
-  await prisma.user.delete({
-    where: { id: userId },
+  console.log('User found:', existingUser.name, existingUser.email);
+
+  // Check if user is a company admin
+  const isCompanyAdmin = await prisma.company.findFirst({
+    where: { adminUserId: userId },
   });
 
+  console.log('Delete user check:', {
+    userId,
+    userName: existingUser.name,
+    isCompanyAdmin: !!isCompanyAdmin,
+    companyAdminId: isCompanyAdmin?.adminUserId,
+    expensesCount: existingUser.expenses.length,
+    approvalStepsCount: existingUser.approvalSteps.length,
+    employeesCount: existingUser.employees.length,
+    managedRulesCount: existingUser.managedApprovalRules.length,
+  });
+
+  if (isCompanyAdmin) {
+    console.log('BLOCKED: User is company admin');
+    throw new AppError("Cannot delete the company admin. Please transfer admin rights to another user first.", 400);
+  }
+
+  // Check if user has dependencies that prevent deletion
+  if (existingUser.expenses.length > 0) {
+    console.log('BLOCKED: User has expenses');
+    throw new AppError(`Cannot delete user with ${existingUser.expenses.length} existing expense(s). Please delete expenses first.`, 400);
+  }
+
+  if (existingUser.approvalSteps.length > 0) {
+    console.log('BLOCKED: User has approval steps');
+    throw new AppError(`Cannot delete user who is an approver in ${existingUser.approvalSteps.length} pending approval(s). Please complete or reassign approvals first.`, 400);
+  }
+
+  if (existingUser.employees.length > 0) {
+    console.log('BLOCKED: User manages employees');
+    throw new AppError(`Cannot delete user who is managing ${existingUser.employees.length} employee(s). Please reassign their manager first.`, 400);
+  }
+
+  if (existingUser.managedApprovalRules.length > 0) {
+    console.log('BLOCKED: User in approval rules');
+    throw new AppError(`Cannot delete user who is configured in ${existingUser.managedApprovalRules.length} approval rule(s). Please update rules first.`, 400);
+  }
+
+  console.log('All checks passed, proceeding with deletion');
+
+  // Delete user's sessions and accounts first
+  await prisma.$transaction([
+    prisma.session.deleteMany({ where: { userId } }),
+    prisma.account.deleteMany({ where: { userId } }),
+    prisma.user.delete({ where: { id: userId } }),
+  ]);
+
+  console.log('User deleted successfully');
   res.json({ message: "User deleted successfully" });
 });

@@ -10,6 +10,7 @@ import countryRoutes from "./routes/countryRoutes";
 import expenseRoutes from "./routes/expenseRoutes";
 import approvalRoutes from "./routes/approvalRoutes";
 import approvalRuleRoutes from "./routes/approvalRuleRoutes";
+import dashboardRoutes from "./routes/dashboardRoutes";
 
 // Load environment variables
 dotenv.config();
@@ -64,6 +65,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/expenses", expenseRoutes);
 app.use("/api/approvals", approvalRoutes);
 app.use("/api/approval-rules", approvalRuleRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 app.use("/api", countryRoutes);
 
 // 404 handler

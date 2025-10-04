@@ -261,6 +261,53 @@ export const deleteApprovalRule = asyncHandler(async (req: Request, res: Respons
 });
 
 /**
+ * Toggle approval rule status (active/inactive)
+ * PATCH /api/approval-rules/:ruleId/toggle
+ * Role: ADMIN
+ */
+export const toggleRuleStatus = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user?.companyId) {
+    throw new AppError("User not associated with a company", 400);
+  }
+
+  const { ruleId } = req.params;
+
+  const existingRule = await prisma.approvalRule.findFirst({
+    where: {
+      id: ruleId,
+      companyId: req.user.companyId,
+    },
+  });
+
+  if (!existingRule) {
+    throw new AppError("Approval rule not found", 404);
+  }
+
+  // Toggle the isActive field
+  const updatedRule = await prisma.approvalRule.update({
+    where: { id: ruleId },
+    data: {
+      isActive: !existingRule.isActive,
+    },
+    include: {
+      specificApprover: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+        },
+      },
+    },
+  });
+
+  res.json({
+    message: `Approval rule ${updatedRule.isActive ? 'activated' : 'deactivated'} successfully`,
+    rule: updatedRule,
+  });
+});
+
+/**
  * Get eligible approvers for a rule
  * GET /api/approval-rules/eligible-approvers
  * Role: ADMIN

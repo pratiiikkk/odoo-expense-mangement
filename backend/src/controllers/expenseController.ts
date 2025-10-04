@@ -64,10 +64,23 @@ async function generateApprovalSteps(
     currentSequence++;
   }
 
-  // Step 2: Additional approvers based on rule type
-  // For SEQUENTIAL rules, we don't add approvers here - they're added dynamically
-  // For PERCENTAGE and SPECIFIC rules, the logic is handled in the approval controller
-  // when checking if expense should auto-approve
+  // Step 2: Handle SPECIFIC approver
+  if (rule.ruleType === "SPECIFIC" && rule.specificApproverId) {
+    await prisma.approvalStep.create({
+      data: {
+        expenseId,
+        approverId: rule.specificApproverId,
+        sequence: currentSequence,
+        status: "PENDING",
+      },
+    });
+    currentSequence++;
+  }
+
+  // Step 3: Additional approvers based on rule type
+  // For SEQUENTIAL and PERCENTAGE rules with multiple approvers,
+  // they would need to be stored in a separate junction table (RuleApprovers)
+  // This is a simplified implementation
 
   return currentSequence > 1 ? 1 : 0; // Return first step or 0 if no steps
 }
