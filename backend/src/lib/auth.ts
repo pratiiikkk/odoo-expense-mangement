@@ -30,17 +30,21 @@ export const auth = betterAuth({
         after: async (user) => {
           // Auto-create company ONLY for the first signup (not for admin-created users)
           try {
-            // Wait a bit to allow admin's user creation to set companyId first
-            await new Promise(resolve => setTimeout(resolve, 100));
+            // Wait to allow admin's user creation to set companyId and role first
+            await new Promise(resolve => setTimeout(resolve, 200));
             
-            // Check if user already has a company (set by admin during creation)
+            // Check if user already has a company or role (set by admin during creation)
             const existingUser = await prisma.user.findUnique({
               where: { id: user.id },
-              include: { company: true },
+              select: { 
+                companyId: true, 
+                role: true,
+              },
             });
 
-            // Only create company if user doesn't have one (initial signup scenario)
-            if (!existingUser?.companyId) {
+            // Only create company if user doesn't have companyId AND role is default EMPLOYEE
+            // If role is anything other than EMPLOYEE or if companyId exists, admin created this user
+            if (!existingUser?.companyId && existingUser?.role === "EMPLOYEE") {
               const defaultCountry = "United States";
               const baseCurrency = await getCurrencyForCountry(defaultCountry);
               
@@ -54,7 +58,7 @@ export const auth = betterAuth({
                 },
               });
 
-              // Update user with company and ADMIN role
+              // Update user with company and ADMIN role (only for self-signup)
               await prisma.user.update({
                 where: { id: user.id },
                 data: {
@@ -65,10 +69,10 @@ export const auth = betterAuth({
 
               console.log(`✅ Company created for user ${user.email}: ${company.id}`);
             } else {
-              console.log(`ℹ️ User ${user.email} already has company, skipping company creation`);
+              console.log(`ℹ️ User ${user.email} already configured by admin, skipping auto-setup`);
             }
           } catch (error) {
-            console.error("Failed to create company for user:", error);
+            console.error("Failed to auto-create company for user:", error);
             // Don't throw error to prevent user creation failure
           }
         },

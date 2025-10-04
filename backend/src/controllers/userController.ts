@@ -2,7 +2,6 @@ import { Request, Response } from "express";
 import { prisma } from "../lib/db";
 import { AppError, asyncHandler } from "../middleware/errorHandler";
 import { auth } from "../lib/auth";
-import crypto from "crypto";
 
 export const getMe = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) {
@@ -68,15 +67,20 @@ export const getUsers = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const createUser = asyncHandler(async (req: Request, res: Response) => {
-  const { name, email, role, managerId } = req.body;
+  const { name, email, password, role, managerId } = req.body;
 
   if (!req.user?.companyId) {
     throw new AppError("User not associated with a company", 400);
   }
 
   // Validate required fields
-  if (!name || !email || !role) {
-    throw new AppError("Name, email, and role are required", 400);
+  if (!name || !email || !password || !role) {
+    throw new AppError("Name, email, password, and role are required", 400);
+  }
+
+  // Validate password length
+  if (password.length < 8) {
+    throw new AppError("Password must be at least 8 characters long", 400);
   }
 
   // Validate role
@@ -112,15 +116,12 @@ export const createUser = asyncHandler(async (req: Request, res: Response) => {
     }
   }
 
-  // Generate random password
-  const randomPassword = crypto.randomBytes(8).toString("hex");
-
   // Use Better Auth to create the user with proper password hashing
   const signupResult = await auth.api.signUpEmail({
     body: {
       name,
       email,
-      password: randomPassword,
+      password: password,
     },
   });
 
@@ -167,8 +168,7 @@ export const createUser = asyncHandler(async (req: Request, res: Response) => {
       manager: user.manager,
       createdAt: user.createdAt,
     },
-    temporaryPassword: randomPassword,
-    message: "User created successfully. Send this password to the user securely.",
+    message: "User created successfully with the provided password.",
   });
 });
 
