@@ -7,6 +7,9 @@ import { errorHandler } from "./middleware/errorHandler";
 import userRoutes from "./routes/userRoutes";
 import authRoutes from "./routes/authRoutes";
 import countryRoutes from "./routes/countryRoutes";
+import expenseRoutes from "./routes/expenseRoutes";
+import approvalRoutes from "./routes/approvalRoutes";
+import approvalRuleRoutes from "./routes/approvalRuleRoutes";
 
 // Load environment variables
 dotenv.config();
@@ -58,6 +61,9 @@ app.get("/api/session", async (req, res) => {
 // API Routes
 app.use("/api/auth-custom", authRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/expenses", expenseRoutes);
+app.use("/api/approvals", approvalRoutes);
+app.use("/api/approval-rules", approvalRuleRoutes);
 app.use("/api", countryRoutes);
 
 // 404 handler
