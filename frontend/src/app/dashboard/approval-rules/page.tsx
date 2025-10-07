@@ -24,10 +24,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, Trash2, Power } from 'lucide-react';
+import { Plus, Trash2, Power, GripVertical, X } from 'lucide-react';
 import { approvalRuleService, userService } from '@/services/api';
 import { ApprovalRule, ApprovalRuleType, User, UserRole } from '@/types';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+
+// Type for approver with sequence
+interface ApproverWithSequence {
+  approverId: string;
+  sequence: number;
+  isRequired: boolean;
+}
 
 export default function ApprovalRulesPage() {
   const [rules, setRules] = useState<ApprovalRule[]>([]);
@@ -44,9 +51,11 @@ export default function ApprovalRulesPage() {
     name: '',
     ruleType: ApprovalRuleType.SEQUENTIAL,
     isManagerApprover: false,
-    approverIds: [] as string[],
+    approversSequenceEnabled: true,
+    approvers: [] as ApproverWithSequence[],
     approvalPercentage: undefined as number | undefined,
     specificApproverId: undefined as string | undefined,
+    thresholdAmount: undefined as number | undefined,
     sequence: 1,
   });
   const [submitting, setSubmitting] = useState(false);
@@ -85,9 +94,11 @@ export default function ApprovalRulesPage() {
         name: '',
         ruleType: ApprovalRuleType.SEQUENTIAL,
         isManagerApprover: false,
-        approverIds: [],
+        approversSequenceEnabled: true,
+        approvers: [],
         approvalPercentage: undefined,
         specificApproverId: undefined,
+        thresholdAmount: undefined,
         sequence: 1,
       });
       fetchData();
@@ -142,12 +153,54 @@ export default function ApprovalRulesPage() {
     return <Badge variant={variants[type] as any}>{type}</Badge>;
   };
 
-  const toggleApprover = (approverId: string) => {
+  const addApprover = (approverId: string) => {
+    if (formData.approvers.some(a => a.approverId === approverId)) return;
+    
+    const nextSequence = formData.approvers.length > 0 
+      ? Math.max(...formData.approvers.map(a => a.sequence)) + 1 
+      : 1;
+
     setFormData((prev) => ({
       ...prev,
-      approverIds: prev.approverIds.includes(approverId)
-        ? prev.approverIds.filter((id) => id !== approverId)
-        : [...prev.approverIds, approverId],
+      approvers: [...prev.approvers, { approverId, sequence: nextSequence, isRequired: false }],
+    }));
+  };
+
+  const removeApprover = (approverId: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      approvers: prev.approvers.filter(a => a.approverId !== approverId),
+    }));
+  };
+
+  const moveApproverUp = (index: number) => {
+    if (index === 0) return;
+    const newApprovers = [...formData.approvers];
+    [newApprovers[index - 1], newApprovers[index]] = [newApprovers[index], newApprovers[index - 1]];
+    // Update sequences
+    newApprovers.forEach((approver, idx) => {
+      approver.sequence = idx + 1;
+    });
+    setFormData(prev => ({ ...prev, approvers: newApprovers }));
+  };
+
+  const moveApproverDown = (index: number) => {
+    if (index === formData.approvers.length - 1) return;
+    const newApprovers = [...formData.approvers];
+    [newApprovers[index], newApprovers[index + 1]] = [newApprovers[index + 1], newApprovers[index]];
+    // Update sequences
+    newApprovers.forEach((approver, idx) => {
+      approver.sequence = idx + 1;
+    });
+    setFormData(prev => ({ ...prev, approvers: newApprovers }));
+  };
+
+  const toggleRequired = (approverId: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      approvers: prev.approvers.map(a =>
+        a.approverId === approverId ? { ...a, isRequired: !a.isRequired } : a
+      ),
     }));
   };
 
@@ -242,32 +295,94 @@ export default function ApprovalRulesPage() {
               {(formData.ruleType === ApprovalRuleType.SEQUENTIAL ||
                 formData.ruleType === ApprovalRuleType.PERCENTAGE ||
                 formData.ruleType === ApprovalRuleType.HYBRID) && (
-                <div className="space-y-2">
-                  <Label>Select Approvers</Label>
-                  <div className="border rounded-md p-4 space-y-2 max-h-48 overflow-y-auto">
-                    {users?.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        No managers/admins available
-                      </p>
-                    ) : (
-                      users.map((user) => (
-                        <div key={user.id} className="flex items-center space-x-2">
-                          <Checkbox
-                            id={`approver-${user.id}`}
-                            checked={formData.approverIds.includes(user.id)}
-                            onCheckedChange={() => toggleApprover(user.id)}
-                          />
-                          <Label
-                            htmlFor={`approver-${user.id}`}
-                            className="cursor-pointer flex-1"
-                          >
-                            {user.name} ({user.role})
-                          </Label>
-                        </div>
-                      ))
-                    )}
+                <>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="approversSequenceEnabled"
+                      checked={formData.approversSequenceEnabled}
+                      onCheckedChange={(checked) =>
+                        setFormData({ ...formData, approversSequenceEnabled: checked as boolean })
+                      }
+                    />
+                    <Label htmlFor="approversSequenceEnabled" className="cursor-pointer">
+                      Process approvers sequentially (one by one)
+                    </Label>
                   </div>
-                </div>
+                  <p className="text-xs text-muted-foreground -mt-2">
+                    If unchecked, all approvers will receive requests simultaneously
+                  </p>
+
+                  <div className="space-y-2">
+                    <Label>Approvers</Label>
+                    
+                    {/* Current Approvers List */}
+                    {formData.approvers.length > 0 && (
+                      <div className="border rounded-md p-3 space-y-2 mb-2">
+                        {formData.approvers.map((approver, index) => {
+                          const user = users.find(u => u.id === approver.approverId);
+                          return (
+                            <div key={approver.approverId} className="flex items-center gap-2 p-2 bg-secondary rounded">
+                              <span className="font-mono text-sm w-6">{approver.sequence}</span>
+                              <div className="flex-1">
+                                <span className="font-medium">{user?.name}</span>
+                                <span className="text-sm text-muted-foreground ml-2">({user?.role})</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => moveApproverUp(index)}
+                                  disabled={index === 0 || !formData.approversSequenceEnabled}
+                                >
+                                  ↑
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => moveApproverDown(index)}
+                                  disabled={index === formData.approvers.length - 1 || !formData.approversSequenceEnabled}
+                                >
+                                  ↓
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => removeApprover(approver.approverId)}
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Add Approvers Dropdown */}
+                    <Select
+                      onValueChange={(value) => {
+                        addApprover(value);
+                      }}
+                      value=""
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Add approver..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {users
+                          .filter(u => !formData.approvers.some(a => a.approverId === u.id))
+                          .map((user) => (
+                            <SelectItem key={user.id} value={user.id}>
+                              {user.name} ({user.role})
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
               )}
 
               {(formData.ruleType === ApprovalRuleType.PERCENTAGE ||
@@ -291,6 +406,9 @@ export default function ApprovalRulesPage() {
                     }
                     required
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Expense auto-approved when this % of approvers approve
+                  </p>
                 </div>
               )}
 
@@ -319,11 +437,35 @@ export default function ApprovalRulesPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    This approver's approval alone can auto-approve the expense
+                  </p>
                 </div>
               )}
 
               <div className="space-y-2">
-                <Label htmlFor="sequence">Rule Sequence</Label>
+                <Label htmlFor="thresholdAmount">Threshold Amount (Optional)</Label>
+                <Input
+                  id="thresholdAmount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="e.g., 1000"
+                  value={formData.thresholdAmount || ''}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      thresholdAmount: e.target.value ? parseFloat(e.target.value) : undefined,
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  Rule applies only when expense amount meets or exceeds this threshold
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="sequence">Rule Priority</Label>
                 <Input
                   id="sequence"
                   type="number"
@@ -365,9 +507,10 @@ export default function ApprovalRulesPage() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
-                  <TableHead>Manager First</TableHead>
+                  <TableHead>Workflow</TableHead>
+                  <TableHead>Threshold</TableHead>
                   <TableHead>Approvers</TableHead>
-                  <TableHead>Sequence</TableHead>
+                  <TableHead>Priority</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
@@ -378,16 +521,40 @@ export default function ApprovalRulesPage() {
                     <TableCell className="font-medium">{rule.name}</TableCell>
                     <TableCell>{getRuleTypeBadge(rule.ruleType)}</TableCell>
                     <TableCell>
-                      {rule.isManagerApprover ? (
-                        <Badge variant="secondary">Yes</Badge>
+                      <div className="space-y-1">
+                        {rule.isManagerApprover && (
+                          <Badge variant="outline" className="text-xs">Manager First</Badge>
+                        )}
+                        {rule.approversSequenceEnabled ? (
+                          <Badge variant="secondary" className="text-xs">Sequential</Badge>
+                        ) : (
+                          <Badge variant="default" className="text-xs">Parallel</Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {rule.thresholdAmount ? `≥ ${rule.thresholdAmount}` : 'All'}
+                    </TableCell>
+                    <TableCell>
+                      {rule.ruleApprovers && rule.ruleApprovers.length > 0 ? (
+                        <div className="text-sm">
+                          {rule.ruleApprovers.length} approver(s)
+                          {rule.ruleApprovers.length <= 3 && (
+                            <div className="text-xs text-muted-foreground mt-1">
+                              {rule.ruleApprovers.map(ra => ra.approver.name).join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      ) : rule.specificApprover ? (
+                        <div className="text-sm">
+                          {rule.specificApprover.name}
+                          <div className="text-xs text-muted-foreground">Specific</div>
+                        </div>
+                      ) : rule.isManagerApprover ? (
+                        <div className="text-sm text-muted-foreground">Manager</div>
                       ) : (
                         '-'
                       )}
-                    </TableCell>
-                    <TableCell>
-                      {(rule.approvers?.length ?? 0) > 0
-                        ? `${rule.approvers?.length} approver(s)`
-                        : rule.specificApprover?.name || (rule.isManagerApprover ? 'Manager' : '-')}
                     </TableCell>
                     <TableCell>{rule.sequence}</TableCell>
                     <TableCell>

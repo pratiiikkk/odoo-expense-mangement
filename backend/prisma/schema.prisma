@@ -36,6 +36,7 @@ model User {
   expenses              Expense[]
   approvalSteps         ApprovalStep[]
   managedApprovalRules  ApprovalRule[]
+  ruleApprovers         RuleApprover[]
   createdCompanies      Company[]       @relation("CompanyAdmin")
 
   @@index([email])
@@ -130,23 +131,42 @@ model Expense {
 }
 
 model ApprovalRule {
-  id                  String              @id @default(uuid())
-  companyId           String
-  company             Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  name                String
-  ruleType            ApprovalRuleType
-  thresholdAmount     Float?
-  approvalPercentage  Int?
-  specificApproverId  String?
-  specificApprover    User?               @relation(fields: [specificApproverId], references: [id])
-  isManagerApprover   Boolean             @default(true)
-  sequence            Int
-  isActive            Boolean             @default(true)
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  id                      String              @id @default(uuid())
+  companyId               String
+  company                 Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name                    String
+  ruleType                ApprovalRuleType
+  thresholdAmount         Float?
+  approvalPercentage      Int?
+  specificApproverId      String?
+  specificApprover        User?               @relation(fields: [specificApproverId], references: [id])
+  isManagerApprover       Boolean             @default(true)
+  approversSequenceEnabled Boolean            @default(true)  // If true, approvers are processed sequentially
+  sequence                Int
+  isActive                Boolean             @default(true)
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  ruleApprovers           RuleApprover[]     // Multiple approvers for this rule
 
   @@index([companyId])
   @@index([specificApproverId])
+}
+
+model RuleApprover {
+  id              String        @id @default(uuid())
+  approvalRuleId  String
+  approvalRule    ApprovalRule  @relation(fields: [approvalRuleId], references: [id], onDelete: Cascade)
+  approverId      String
+  approver        User          @relation(fields: [approverId], references: [id])
+  sequence        Int           // Order of this approver in the sequence
+  isRequired      Boolean       @default(false)  // If true, this approver's approval is mandatory
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([approvalRuleId])
+  @@index([approverId])
+  @@unique([approvalRuleId, approverId])  // Each approver can only appear once per rule
 }
 
 model ApprovalStep {
