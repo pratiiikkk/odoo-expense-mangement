@@ -80,6 +80,18 @@ export interface ApprovalStep {
   createdAt: string;
 }
 
+// Rule Approver Type
+export interface RuleApprover {
+  id: string;
+  approvalRuleId: string;
+  approverId: string;
+  approver: User;
+  sequence: number;
+  isRequired: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // Approval Rule Types
 export interface ApprovalRule {
   id: string;
@@ -87,10 +99,13 @@ export interface ApprovalRule {
   companyId: string;
   ruleType: ApprovalRuleType;
   isManagerApprover: boolean;
-  approvers?: User[]; // Optional - backend may not provide this
+  approversSequenceEnabled: boolean; // New field
+  approvers?: User[]; // Optional - deprecated, use ruleApprovers
+  ruleApprovers?: RuleApprover[]; // New field - multiple approvers
   approvalPercentage?: number;
   specificApproverId?: string;
   specificApprover?: User;
+  thresholdAmount?: number;
   sequence: number;
   isActive: boolean;
   createdAt: string;
