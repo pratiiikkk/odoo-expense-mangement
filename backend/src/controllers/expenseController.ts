@@ -22,17 +22,37 @@ async function generateApprovalSteps(
   const rules = await prisma.approvalRule.findMany({
     where: {
       companyId,
+      isActive: true, // Only get active rules
       OR: [
         { thresholdAmount: null }, // Rules that apply to all amounts
         { thresholdAmount: { lte: expenseAmount } }, // Rules where expense meets threshold
       ],
     },
+    include: {
+      ruleApprovers: {
+        include: {
+          approver: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+        },
+        orderBy: { sequence: "asc" },
+      },
+    },
     orderBy: { sequence: "asc" },
   });
 
+  console.log(`[DEBUG] Found ${rules.length} approval rules for company ${companyId}`);
+  console.log(`[DEBUG] Employee ID: ${employeeId}, Manager ID: ${employee?.managerId}`);
+  console.log(`[DEBUG] Expense Amount: ${expenseAmount}`);
+  
   if (rules.length === 0) {
     // No rules configured - use default manager approval if available
-    if (employee?.managerId) {
+    if (employee?.managerId && employee.managerId !== employeeId) {
+      console.log(`[DEBUG] No rules found, creating default manager approval for manager ${employee.managerId}`);
       await prisma.approvalStep.create({
         data: {
           expenseId,
@@ -43,6 +63,7 @@ async function generateApprovalSteps(
       });
       return 1; // Return current approval step
     }
+    console.log(`[DEBUG] No rules and no manager - no approval needed`);
     return 0; // No approval needed
   }
 
@@ -50,11 +71,17 @@ async function generateApprovalSteps(
   // In a more complex system, you might want to combine multiple rules
   const rule = rules[0];
   let currentSequence = 1;
+  let stepsCreated = 0;
+  const createdApproverIds = new Set<string>(); // Track to avoid duplicate approvers
+
+  console.log(`[DEBUG] Processing rule: ${rule.name}, type: ${rule.ruleType}, isManagerApprover: ${rule.isManagerApprover}, approversSequenceEnabled: ${rule.approversSequenceEnabled}`);
+  console.log(`[DEBUG] Rule has ${rule.ruleApprovers?.length || 0} approvers configured`);
 
   // Step 1: Manager approval if required
   if (rule.isManagerApprover && employee?.managerId) {
     // Don't create approval step if manager is the same as employee (self-approval)
-    if (employee.managerId !== employeeId) {
+    if (employee.managerId !== employeeId && !createdApproverIds.has(employee.managerId)) {
+      console.log(`[DEBUG] Creating manager approval step for manager ${employee.managerId} at sequence ${currentSequence}`);
       await prisma.approvalStep.create({
         data: {
           expenseId,
@@ -63,14 +90,67 @@ async function generateApprovalSteps(
           status: "PENDING",
         },
       });
+      createdApproverIds.add(employee.managerId);
       currentSequence++;
+      stepsCreated++;
+    } else {
+      console.log(`[DEBUG] Skipping manager approval - self-approval or duplicate detected`);
+    }
+  } else {
+    console.log(`[DEBUG] Manager approval not required or no manager assigned`);
+  }
+
+  // Step 2: Handle multiple approvers from RuleApprovers
+  if (rule.ruleApprovers && rule.ruleApprovers.length > 0) {
+    console.log(`[DEBUG] Processing ${rule.ruleApprovers.length} rule approvers`);
+    
+    if (rule.approversSequenceEnabled) {
+      // Sequential: Process approvers one by one in order
+      for (const ruleApprover of rule.ruleApprovers) {
+        if (ruleApprover.approverId !== employeeId && !createdApproverIds.has(ruleApprover.approverId)) {
+          console.log(`[DEBUG] Creating sequential approval step for approver ${ruleApprover.approver.name} at sequence ${currentSequence}`);
+          await prisma.approvalStep.create({
+            data: {
+              expenseId,
+              approverId: ruleApprover.approverId,
+              sequence: currentSequence,
+              status: "PENDING",
+            },
+          });
+          createdApproverIds.add(ruleApprover.approverId);
+          currentSequence++;
+          stepsCreated++;
+        }
+      }
+    } else {
+      // Parallel: All approvers get the same sequence number (process simultaneously)
+      const parallelSequence = currentSequence;
+      for (const ruleApprover of rule.ruleApprovers) {
+        if (ruleApprover.approverId !== employeeId && !createdApproverIds.has(ruleApprover.approverId)) {
+          console.log(`[DEBUG] Creating parallel approval step for approver ${ruleApprover.approver.name} at sequence ${parallelSequence}`);
+          await prisma.approvalStep.create({
+            data: {
+              expenseId,
+              approverId: ruleApprover.approverId,
+              sequence: parallelSequence,
+              status: "PENDING",
+            },
+          });
+          createdApproverIds.add(ruleApprover.approverId);
+          stepsCreated++;
+        }
+      }
+      if (stepsCreated > 0) {
+        currentSequence++; // Only increment sequence once for all parallel approvers
+      }
     }
   }
 
-  // Step 2: Handle SPECIFIC approver
-  if (rule.ruleType === "SPECIFIC" && rule.specificApproverId) {
+  // Step 3: Handle SPECIFIC approver (for backward compatibility or additional specific approver)
+  if (rule.specificApproverId && !createdApproverIds.has(rule.specificApproverId)) {
     // Don't create approval step if specific approver is the same as employee (self-approval)
     if (rule.specificApproverId !== employeeId) {
+      console.log(`[DEBUG] Creating specific approver step for approver ${rule.specificApproverId} at sequence ${currentSequence}`);
       await prisma.approvalStep.create({
         data: {
           expenseId,
@@ -79,16 +159,18 @@ async function generateApprovalSteps(
           status: "PENDING",
         },
       });
+      createdApproverIds.add(rule.specificApproverId);
       currentSequence++;
+      stepsCreated++;
+    } else {
+      console.log(`[DEBUG] Skipping specific approver - self-approval detected`);
     }
   }
 
-  // Step 3: Additional approvers based on rule type
-  // For SEQUENTIAL and PERCENTAGE rules with multiple approvers,
-  // they would need to be stored in a separate junction table (RuleApprovers)
-  // This is a simplified implementation
-
-  return currentSequence > 1 ? 1 : 0; // Return first step or 0 if no steps
+  console.log(`[DEBUG] Total approval steps created: ${stepsCreated}`);
+  
+  // Return the sequence number of the first step if any steps were created, otherwise 0
+  return stepsCreated > 0 ? 1 : 0;
 }
 
 /**
@@ -169,15 +251,19 @@ export const submitExpense = asyncHandler(async (req: Request, res: Response) =>
     user.companyId
   );
 
+  console.log(`[DEBUG] generateApprovalSteps returned currentStep: ${currentStep}`);
+
   // Update expense based on approval steps
   if (currentStep > 0) {
     // Has approval steps - set to first step
+    console.log(`[DEBUG] Setting expense to PENDING with currentApprovalStep: ${currentStep}`);
     await prisma.expense.update({
       where: { id: expense.id },
       data: { currentApprovalStep: currentStep },
     });
   } else {
     // No approval steps needed - auto-approve
+    console.log(`[DEBUG] No approval steps created - auto-approving expense`);
     await prisma.expense.update({
       where: { id: expense.id },
       data: { 

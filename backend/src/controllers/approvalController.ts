@@ -61,7 +61,8 @@ export const getPendingApprovals = asyncHandler(async (req: Request, res: Respon
   // Filter to only show expenses where current step is for this approver
   const currentPendingApprovals = pendingSteps.filter((step: any) => {
     const expense = step.expense;
-    // Check if this is the current approval step
+    // Check if this is the current approval step OR if it's a parallel approval step
+    // For parallel approvals, all steps with the same sequence are active simultaneously
     return step.sequence === expense.currentApprovalStep;
   });
 
@@ -194,7 +195,30 @@ export const approveExpense = asyncHandler(async (req: Request, res: Response) =
     },
   });
 
-  // Check if there are more approval steps
+  // Check if there are more approval steps in the current sequence (parallel approvals)
+  const currentSequenceSteps = approvalStep.expense.approvalSteps.filter(
+    (step: any) => step.sequence === approvalStep.sequence
+  );
+
+  const allCurrentSequenceApproved = currentSequenceSteps.every(
+    (step: any) => step.id === approvalStepId || step.status === "APPROVED"
+  );
+
+  if (!allCurrentSequenceApproved) {
+    // There are still other approvers in the current sequence who haven't approved yet
+    res.json({
+      message: "Your approval has been recorded. Waiting for other approvers in this step.",
+      expenseStatus: "PENDING",
+      currentStep: approvalStep.sequence,
+      totalSteps: approvalStep.expense.approvalSteps.length,
+      pendingApproversInCurrentStep: currentSequenceSteps.filter(
+        (step: any) => step.id !== approvalStepId && step.status === "PENDING"
+      ).length,
+    });
+    return;
+  }
+
+  // All approvers in current sequence have approved, check if there are more steps
   const nextStep = approvalStep.expense.approvalSteps.find(
     (step: any) => step.sequence === approvalStep.sequence + 1
   );
@@ -208,10 +232,15 @@ export const approveExpense = asyncHandler(async (req: Request, res: Response) =
       },
     });
 
+    // Get all approvers in the next sequence
+    const nextStepApprovers = approvalStep.expense.approvalSteps
+      .filter((step: any) => step.sequence === nextStep.sequence)
+      .map((step: any) => step.approver.name);
+
     res.json({
-      message: "Expense approved. Moved to next approver.",
+      message: "Expense approved. Moved to next approver(s).",
       expenseStatus: "PENDING",
-      nextApprover: nextStep.approver.name,
+      nextApprovers: nextStepApprovers,
       currentStep: nextStep.sequence,
       totalSteps: approvalStep.expense.approvalSteps.length,
     });
